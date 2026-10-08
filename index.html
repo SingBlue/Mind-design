@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Spiral Stage</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0916">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="web.css">
+</head>
+<body>
+<header id="titlebar">
+  <span class="ttl">Spiral Stage</span>
+  <span class="spacer"></span>
+  <button id="tbMin" title="Minimize">&#8211;</button>
+  <button id="tbBig" title="Fill screen (F)">&#9633;</button>
+  <button id="tbClose" title="Close">&#10005;</button>
+</header>
+
+<div id="app">
+  <main id="stage">
+    <div id="flash" dir="auto"></div>
+  </main>
+
+  <aside id="panel">
+    <div class="toolbar">
+      <button id="btnPause" title="Space">Pause</button>
+      <button id="btnBlackout" title="B">Hide all</button>
+      <button id="btnFull" title="F">Fill screen</button>
+      <button id="btnHide" title="H">Hide panel</button>
+    </div>
+
+    <section class="card" id="overlayCard">
+      <h2>Overlay on your screen</h2>
+      <p class="hint" style="margin-top:0">Shows the layers on top of any app (Word, YouTube, a video player). Clicks pass through to the app underneath.</p>
+      <button id="btnOverlay" class="wide">Start overlay</button>
+      <label class="row"><span>Master opacity</span><input type="range" id="mOpacity" min="0.05" max="1" step="0.01" value="1"><output></output></label>
+      <p class="hint">Hotkeys that work in any app:<br>
+        Ctrl+Alt+O  overlay on or off<br>
+        Ctrl+Alt+P  show or hide this panel<br>
+        Ctrl+Alt+H  hide everything right now<br>
+        Ctrl+Alt+Space  pause or resume</p>
+    </section>
+
+    <div id="layers"></div>
+
+    <section class="card" id="flashCard">
+      <h2>Subliminal text</h2>
+      <label class="row check"><input type="checkbox" id="fOn"><span>Flash text over the layers</span></label>
+      <label class="col"><span>Messages (one per line)</span>
+        <textarea id="fMsgs" rows="4" dir="auto">I am calm
+I am focused
+I am relaxed</textarea></label>
+      <div class="subcard">
+        <label class="row"><span>Scripts</span><select id="scList"></select></label>
+        <div class="btnrow"><button id="scLoad">Load</button><button id="scDelete">Delete</button></div>
+        <label class="row"><span>Save as</span><input type="text" id="scName" placeholder="Script name" spellcheck="false"></label>
+        <div class="btnrow"><button id="scSave">Save script</button><button id="scImport">Import .txt&hellip;</button><button id="scExport">Export .txt</button><input type="file" id="scFile" accept=".txt,text/plain" hidden></div>
+      </div>
+      <label class="row"><span>Every (s)</span><input type="range" id="fInterval" min="0.4" max="10" step="0.1" value="3"><output></output></label>
+      <label class="row"><span>Shown for (ms)</span><input type="range" id="fDuration" min="16" max="400" step="2" value="60"><output></output></label>
+      <label class="row"><span>Size</span><input type="range" id="fSize" min="4" max="40" step="1" value="14"><output></output></label>
+      <label class="row"><span>Opacity</span><input type="range" id="fOpacity" min="0.1" max="1" step="0.05" value="0.85"><output></output></label>
+      <label class="row"><span>Color</span><input type="color" id="fColor" value="#ffffff"></label>
+      <label class="row"><span>Order</span>
+        <select id="fOrder"><option value="seq">In order</option><option value="random">Random</option></select></label>
+      <p class="hint">Flashes are held to at most 2.5 per second to reduce seizure risk.</p>
+    </section>
+
+    <section class="card" id="toneCard">
+      <h2>Tones and binaural beats</h2>
+      <button id="toneBtn" class="wide">Play tone</button>
+      <label class="row"><span>Type</span>
+        <select id="tMode"><option value="pure">Pure tone</option><option value="binaural">Binaural beat (headphones)</option><option value="isochronic">Isochronic pulses</option></select></label>
+      <label class="row"><span>Frequency</span>
+        <select id="tPreset"><option value="174">174 Hz</option><option value="285">285 Hz</option><option value="396">396 Hz</option><option value="417">417 Hz</option><option value="432">432 Hz</option><option value="528">528 Hz</option><option value="639">639 Hz</option><option value="741">741 Hz</option><option value="852">852 Hz</option><option value="963">963 Hz</option><option value="custom">Custom</option></select></label>
+      <label class="row"><span>Exact Hz</span><input type="number" id="tFreq" min="20" max="2000" step="0.1" value="432"></label>
+      <div id="tBeatRows" hidden>
+        <label class="row"><span>Beat</span><select id="tBeatPreset"><option value="2">Delta 2 Hz (deep sleep)</option><option value="6">Theta 6 Hz (deep relaxation)</option><option value="7.83">Schumann 7.83 Hz</option><option value="10" selected>Alpha 10 Hz (calm focus)</option><option value="18">Beta 18 Hz (alert)</option><option value="40">Gamma 40 Hz</option><option value="custom">Custom</option></select></label>
+        <label class="row"><span>Beat Hz</span><input type="number" id="tBeat" min="0.5" max="60" step="0.1" value="10"></label>
+      </div>
+      <label class="row"><span>Wave</span>
+        <select id="tWave"><option value="sine">Sine (pure)</option><option value="triangle">Triangle (softer)</option></select></label>
+      <label class="row"><span>Volume</span><input type="range" id="tVol" min="0" max="1" step="0.01" value="0.3"><output></output></label>
+      <p class="hint">Use headphones for binaural beats. Start with the volume low. Hide all (Ctrl+Alt+H) and pause also silence the tone.</p>
+    </section>
+
+    <section class="card" id="bgCard">
+      <h2>Background sound</h2>
+      <p class="hint" style="margin-top:0">Generated live on your PC, so it works offline.</p>
+      <button id="bgBtn" class="wide">Play sound</button>
+      <label class="row"><span>Sound</span>
+        <select id="bgType"><option value="rain">Rain</option><option value="ocean">Ocean waves</option><option value="wind">Wind</option><option value="brown">Brown noise (deep)</option><option value="pink">Pink noise (soft)</option><option value="white">White noise</option></select></label>
+      <label class="row"><span>Volume</span><input type="range" id="bgVol" min="0" max="1" step="0.01" value="0.3"><output></output></label>
+    </section>
+
+    <section class="card" id="audioCard">
+      <h2>Audio files</h2>
+      <div class="btnrow"><button id="aAdd">Add audio files&hellip;</button><input type="file" id="aInput" accept="audio/*,.mp3,.wav,.ogg,.m4a,.flac,.aac" multiple hidden></div>
+      <ul id="aList"></ul>
+      <p class="hint" id="aEmpty" style="margin-top:0">No audio yet. Add music, affirmations or any recording.</p>
+      <div class="btnrow"><button id="aPrev">Previous</button><button id="aPlay">Play</button><button id="aNext">Next</button></div>
+      <div class="seek"><input type="range" id="aSeek" min="0" max="1000" step="1" value="0"><span class="time" id="aTime">0:00 / 0:00</span></div>
+      <label class="row"><span>Repeat</span>
+        <select id="aLoop"><option value="all">Whole list</option><option value="one">This track</option><option value="off">Off</option></select></label>
+      <label class="row check"><input type="checkbox" id="aShuffle"><span>Shuffle</span></label>
+      <label class="row"><span>Volume</span><input type="range" id="aVol" min="0" max="1" step="0.01" value="0.8"><output></output></label>
+      <label class="row"><span>Speed</span><input type="range" id="aSpeed" min="0.5" max="1.5" step="0.05" value="1"><output></output></label>
+    </section>
+
+    <section class="card" id="timerCard">
+      <h2>Session timer</h2>
+      <label class="row"><span>Minutes</span><input type="number" id="tmMin" min="0.1" max="600" step="0.1" value="30"></label>
+      <label class="row"><span>Fade out (s)</span><input type="number" id="tmFade" min="0" max="600" step="1" value="30"></label>
+      <button id="tmBtn" class="wide">Start timer</button>
+      <p class="hint" id="tmLabel">When time is up, the sound, tone, audio, spiral and text fade out together, then everything stops.</p>
+    </section>
+
+    <section class="card" id="sessionCard">
+      <h2>Timeline session</h2>
+      <p class="hint" style="margin-top:0">Script a whole session. At the times you set, the spiral, text, tone and sounds change by themselves.</p>
+      <button id="seBtn" class="wide">Play session</button>
+      <div class="seekbar"><div id="seFill"></div></div>
+      <p class="hint" id="seLabel" style="margin-top:0">Not playing. Add events below.</p>
+      <div id="seList"></div>
+      <div class="btnrow">
+        <select id="seType">
+          <option value="set">Change a setting</option>
+          <option value="colors">Change spiral colors</option>
+          <option value="layer">Show or hide a layer</option>
+          <option value="flash">Flashing text on or off</option>
+          <option value="script">Switch flash script</option>
+          <option value="tone">Tone on or off</option>
+          <option value="bg">Background sound</option>
+          <option value="audio">Audio file</option>
+          <option value="end">End the session</option>
+        </select>
+        <button id="seAdd">Add event</button>
+      </div>
+      <div class="btnrow"><button id="seStart">Capture start setup</button><span class="time" id="seStartLabel">No start setup</span></div>
+      <p class="hint" style="margin-top:0">The start setup is restored every time the session plays, so it always begins the same way.</p>
+      <div class="subcard">
+        <label class="row"><span>Sessions</span><select id="seSaved"></select></label>
+        <div class="btnrow"><button id="seLoad">Load</button><button id="seDelete">Delete</button><button id="seExample">Load example</button></div>
+        <label class="row"><span>Save as</span><input type="text" id="seName" placeholder="Session name" spellcheck="false"></label>
+        <div class="btnrow"><button id="seSave">Save session</button><button id="seImport">Import&hellip;</button><button id="seExport">Export</button><input type="file" id="seFile" accept=".json,application/json" hidden></div>
+      </div>
+    </section>
+
+    <section class="card" id="presetCard">
+      <h2>Presets</h2>
+      <label class="row"><span>Saved</span><select id="prList"></select></label>
+      <div class="btnrow"><button id="prLoad">Load</button><button id="prDelete">Delete</button></div>
+      <label class="row"><span>Save as</span><input type="text" id="prName" placeholder="Name" spellcheck="false"></label>
+      <button id="prSave">Save current setup</button>
+      <p class="hint">A preset keeps everything: layers, video file locations, text, tone and opacity. The app also remembers your last setup on its own.</p>
+    </section>
+
+    <section class="card">
+      <h2>Performance</h2>
+      <label class="row"><span>Frame rate</span>
+        <select id="pFps"><option value="30">30 fps</option><option value="60" selected>60 fps</option><option value="0">Unlimited</option></select></label>
+      <label class="row"><span>Spiral quality</span>
+        <select id="pScale"><option value="1" selected>Full</option><option value="0.75">Balanced</option><option value="0.5">Lite</option></select></label>
+      <label class="row check"><input type="checkbox" id="pAuto"><span>Light mode while the overlay is on (30 fps, half-size spiral)</span></label>
+      <label class="row check"><input type="checkbox" id="pSoft"><span>Draw the spiral on the processor (restarts the app)</span></label>
+      <p class="hint">Try these if videos in your browser start slowly or stutter while the overlay is on. Your normal settings come back when the overlay stops.</p>
+    </section>
+  </aside>
+</div>
+
+<button id="reveal" title="Show panel (Ctrl+Alt+P)" hidden>Show panel</button>
+<div id="toast" hidden></div>
+
+<div id="warning">
+  <div class="dialog">
+    <h1>Before you start</h1>
+    <p>Spirals and flashing text can trigger seizures in people with photosensitive epilepsy. Don't use this if you or anyone in your family has a history of seizures.</p>
+    <p>Stop right away if you feel dizzy, nauseous or unwell. Don't use it while driving or operating machinery.</p>
+    <button id="ack">I understand</button>
+  </div>
+</div>
+
+<template id="layerTpl">
+  <section class="card">
+    <h2 data-k="title"></h2>
+
+    <label class="row"><span>Source</span>
+      <select data-k="source">
+        <option value="off">Off</option>
+        <option value="spiral">Built-in spiral</option>
+        <option value="file">Video file</option>
+      </select></label>
+
+    <div class="grp" data-g="spiral" hidden>
+      <label class="row"><span>Speed</span><input type="range" data-k="speed" min="0" max="3" step="0.05" value="0.6"><output></output></label>
+      <label class="row"><span>Arms</span><input type="range" data-k="arms" min="1" max="16" step="1" value="6"><output></output></label>
+      <label class="row"><span>Tightness</span><input type="range" data-k="twist" min="0" max="30" step="0.5" value="8"><output></output></label>
+      <label class="row"><span>Edge softness</span><input type="range" data-k="soft" min="0.02" max="1" step="0.02" value="0.35"><output></output></label>
+      <label class="row"><span>Pulse</span><input type="range" data-k="pulse" min="0" max="1" step="0.05" value="0.3"><output></output></label>
+      <label class="row"><span>Colors</span>
+        <span class="pair"><input type="color" data-k="colorA" value="#8f6bff"><input type="color" data-k="colorB" value="#0d0820"></span></label>
+      <label class="row check"><input type="checkbox" data-k="reverse"><span>Reverse direction</span></label>
+      <label class="row check"><input type="checkbox" data-k="cut" checked><span>See-through dark bands (overlay only)</span></label>
+    </div>
+
+    <div class="grp" data-g="file" hidden>
+      <div class="row">
+        <button type="button" data-k="fileBtn">Choose video&hellip;</button>
+        <span class="fname" data-k="fileName">No file chosen</span>
+        <input type="file" data-k="fileInput" accept="video/*,.mkv,.webm,.mp4,.mov" hidden>
+      </div>
+      <div class="seek"><input type="range" data-k="fileSeek" min="0" max="1000" step="1" value="0"><span class="time" data-k="fileTime">0:00 / 0:00</span></div>
+      <div class="btnrow"><button type="button" data-k="abA">Set A</button><button type="button" data-k="abB">Set B</button><button type="button" data-k="abClear">Clear A-B</button><span class="time" data-k="abLabel"></span></div>
+      <label class="row check"><input type="checkbox" data-k="loop" checked><span>Loop</span></label>
+      <label class="row"><span>Playback speed</span><input type="range" data-k="rate" min="0.25" max="2" step="0.05" value="1"><output></output></label>
+      <label class="row"><span>Volume</span><input type="range" data-k="volume" min="0" max="1" step="0.05" value="0.8"><output></output></label>
+      <label class="row"><span>Fit</span>
+        <select data-k="fit"><option value="cover">Fill screen</option><option value="contain">Show whole video</option></select></label>
+    </div>
+
+    <div class="grp" data-g="url" hidden>
+      <div class="row">
+        <input type="text" data-k="urlInput" placeholder="Paste a link" spellcheck="false">
+        <button type="button" data-k="urlGo">Load</button>
+      </div>
+      <div class="seek"><input type="range" data-k="webSeek" min="0" max="1000" step="1" value="0"><span class="time" data-k="webTime">0:00 / 0:00</span></div>
+      <label class="row check"><input type="checkbox" data-k="forceLoop" checked><span>Force video loop</span></label>
+      <label class="row check"><input type="checkbox" data-k="interactive" checked><span>Click inside this page (not in overlay)</span></label>
+      <label class="row"><span>Volume</span><input type="range" data-k="webVolume" min="0" max="1" step="0.05" value="0.8"><output></output></label>
+      <p class="hint" data-k="status"></p>
+    </div>
+
+    <label class="row"><span>Opacity</span><input type="range" data-k="opacity" min="0" max="1" step="0.01" value="1"><output></output></label>
+    <label class="row"><span>Blend</span>
+      <select data-k="blend">
+        <option value="normal">Normal</option>
+        <option value="screen">Screen</option>
+        <option value="multiply">Multiply</option>
+        <option value="overlay">Overlay</option>
+        <option value="lighten">Lighten</option>
+        <option value="difference">Difference</option>
+      </select></label>
+  </section>
+</template>
+
+<script src="spiral.js"></script>
+<script src="app.js"></script>
+<script src="web.js"></script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+/* Phone and tablet layout. Everything here only changes layout; the app logic is shared with the PC version. */
+#titlebar, #overlayCard, #reveal.pc-only { display: none !important; }
+html, body { height: auto; min-height: 100%; overflow-x: hidden; overflow-y: auto; background: #000; }
+body { padding-bottom: env(safe-area-inset-bottom); }
+#app { display: block; height: auto; }
+#stage { position: sticky; top: 0; z-index: 20; height: 42vh; min-height: 220px; border-bottom: 1px solid var(--line); }
+#stage:fullscreen { height: 100vh; }
+#app.nopanel #stage { height: 100vh; }
+#panel { overflow: visible; border-left: 0; padding: 12px 12px 80px; }
+#reveal { top: auto; bottom: 16px; right: 16px; opacity: 0.6; padding: 12px 16px; }
+button, select, input[type="text"], input[type="number"] { min-height: 40px; }
+input[type="range"] { min-height: 32px; }
+@media (orientation: landscape) and (max-height: 520px) {
+  #stage { height: 62vh; min-height: 150px; }
+}
+@media (min-width: 900px) {
+  #app { display: grid; grid-template-columns: 1fr 360px; height: 100vh; }
+  #stage { position: relative; height: 100%; border-bottom: 0; }
+  #panel { overflow-y: auto; padding-bottom: 12px; }
+  #app.nopanel { grid-template-columns: 1fr; }
+}
