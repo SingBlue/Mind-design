@@ -150,6 +150,8 @@
       if (c) {
         if (c.r) c.r.stop();
         if (c.ro) c.ro.disconnect();
+        if (c.cleanup) c.cleanup();
+        if (c.hello) clearInterval(c.hello);
         if (c.node) c.node.remove();
       }
       if (this.objectUrl) { URL.revokeObjectURL(this.objectUrl); this.objectUrl = null; }
@@ -190,33 +192,77 @@
     }
 
     buildUrl(raw) {
-      const wv = document.createElement('webview');
-      wv.className = 'fill';
-      const ua = navigator.userAgent.replace(/ Electron\/\S+/, '').replace(/ spiral-stage\/\S+/, '');
-      wv.setAttribute('useragent', ua);
-      wv.setAttribute('src', toEmbedUrl(raw));
       const status = this.q('status');
-      status.textContent = 'Loading…';
-      const c = { type: 'url', node: wv, ready: false };
-      wv.addEventListener('dom-ready', () => { c.ready = true; status.textContent = ''; this.pokeWeb(); });
-      wv.addEventListener('did-fail-load', (e) => {
-        if (e.errorCode === -3 || !e.isMainFrame) return;
-        status.textContent = `Couldn't load this page (${e.errorDescription}).`;
-      });
-      this.root.appendChild(wv);
+      const src = toEmbedUrl(raw);
+      const isYt = /^https:\/\/www\.youtube\.com\/embed\//.test(src);
+      const isVid = /\.(mp4|webm|m4v|mov|ogv|ogg)(\?|#|$)/i.test(src);
+      let node;
+      const c = { type: 'url', kind: isYt ? 'yt' : isVid ? 'video' : 'page', ready: false, yt: { t: 0, d: 0 } };
+      if (isVid) {
+        node = document.createElement('video');
+        node.src = src;
+        node.playsInline = true;
+        node.loop = true;
+        node.addEventListener('loadeddata', () => { c.ready = true; status.textContent = ''; });
+        node.addEventListener('error', () => { status.textContent = "Couldn't play this video link. It may need to be a direct link to a video file."; });
+        status.textContent = 'Loading\u2026';
+        if (!state.paused) node.play().catch(() => {});
+      } else {
+        node = document.createElement('iframe');
+        node.allow = 'autoplay; encrypted-media; picture-in-picture; fullscreen';
+        node.setAttribute('allowfullscreen', '');
+        node.referrerPolicy = 'strict-origin-when-cross-origin';
+        let u = src;
+        if (isYt) u += (u.includes('?') ? '&' : '?') + 'enablejsapi=1&playsinline=1&origin=' + encodeURIComponent(location.origin);
+        node.src = u;
+        status.textContent = isYt
+          ? 'Loading YouTube\u2026 if it does not start, tap play inside the video. Some videos do not allow embedding.'
+          : 'Most websites refuse to be shown inside another page. YouTube links and direct video links work best.';
+        if (isYt) {
+          const onMsg = (e) => {
+            if (e.source !== node.contentWindow || typeof e.data !== 'string') return;
+            let d; try { d = JSON.parse(e.data); } catch (_) { return; }
+            if (d.event === 'onReady' || d.event === 'initialDelivery') { c.ready = true; this.pokeWeb(); }
+            const i = d.info;
+            if (i) {
+              if (typeof i.currentTime === 'number') c.yt.t = i.currentTime;
+              if (typeof i.duration === 'number') c.yt.d = i.duration;
+              c.ready = true;
+              if (i.playerState === 0 && this.v('forceLoop')) this.ytCmd('seekTo', [0, true]), this.ytCmd('playVideo');
+            }
+          };
+          window.addEventListener('message', onMsg);
+          c.cleanup = () => window.removeEventListener('message', onMsg);
+          const hello = () => { try { node.contentWindow.postMessage(JSON.stringify({ event: 'listening', id: 1, channel: 'widget' }), '*'); } catch (_) {} };
+          node.addEventListener('load', () => { hello(); c.hello = setInterval(() => { if (c.ready) { clearInterval(c.hello); } else hello(); }, 700); });
+        }
+      }
+      node.className = 'fill';
+      c.node = node;
+      this.root.appendChild(node);
       this.cur = c;
       this.timer = setInterval(() => this.pokeWeb(), 2000);
       this.seekTimer = setInterval(() => this.tick(), 250);
     }
 
+    ytCmd(func, args) {
+      const c = this.cur;
+      if (!c || c.kind !== 'yt') return;
+      try { c.node.contentWindow.postMessage(JSON.stringify({ event: 'command', func, args: args || [] }), '*'); } catch (_) {}
+    }
+
     pokeWeb() {
       const c = this.cur;
-      if (!c || c.type !== 'url' || !c.ready) return;
-      const loop = this.v('forceLoop');
-      const vol = this.v('webVolume');
-      const act = state.paused ? 'v.pause()' : 'if(v.paused&&!v.ended){v.play().catch(function(){})}';
-      const js = `document.querySelectorAll('video').forEach(function(v){v.loop=${loop};v.volume=${vol};${act}})`;
-      try { c.node.executeJavaScript(js).catch(() => {}); } catch (_) { /* not ready */ }
+      if (!c || c.type !== 'url') return;
+      const loop = this.v('forceLoop'), vol = this.v('webVolume');
+      if (c.kind === 'video') {
+        c.node.loop = loop; c.node.volume = vol;
+        if (state.paused) c.node.pause(); else if (c.node.paused && !c.node.ended) c.node.play().catch(() => {});
+      } else if (c.kind === 'yt') {
+        this.ytCmd('setVolume', [Math.round(vol * 100)]);
+        this.ytCmd('setLoop', [!!loop]);
+        if (state.paused) this.ytCmd('pauseVideo');
+      }
     }
 
     // ---- seek bar and A-B loop
@@ -228,11 +274,10 @@
         this.showTime('file', v.currentTime, v.duration);
         const { a, b } = this.ab;
         if (a != null && b != null && b > a && v.currentTime >= b) v.currentTime = a;
-      } else if (c.type === 'url' && c.ready) {
-        const js = '(function(){var v=document.querySelector("video");return v?[v.currentTime,v.duration]:null})()';
-        try {
-          c.node.executeJavaScript(js).then((r) => { if (r) this.showTime('web', r[0], r[1]); }).catch(() => {});
-        } catch (_) { /* not ready */ }
+      } else if (c.type === 'url') {
+        if (c.kind === 'video') this.showTime('web', c.node.currentTime, c.node.duration);
+        else if (c.kind === 'yt') this.showTime('web', c.yt.t, c.yt.d);
+        else this.showTime('web', 0, 0);
       }
     }
 
@@ -250,9 +295,9 @@
       if (c.type === 'file') {
         const d = c.node.duration;
         if (isFinite(d)) c.node.currentTime = frac * d;
-      } else if (c.type === 'url' && c.ready) {
-        const js = `(function(){var v=document.querySelector("video");if(v&&isFinite(v.duration)){v.currentTime=${frac}*v.duration}})()`;
-        try { c.node.executeJavaScript(js).catch(() => {}); } catch (_) { /* not ready */ }
+      } else if (c.type === 'url') {
+        if (c.kind === 'video' && isFinite(c.node.duration)) c.node.currentTime = frac * c.node.duration;
+        else if (c.kind === 'yt' && c.yt.d > 0) { c.yt.t = frac * c.yt.d; this.ytCmd('seekTo', [frac * c.yt.d, true]); }
       }
     }
 
@@ -308,7 +353,7 @@
       if (!c) return;
       if (c.type === 'spiral') { p ? c.r.stop() : c.r.start(); }
       else if (c.type === 'file') { p ? c.node.pause() : c.node.play().catch(() => {}); }
-      else if (c.type === 'url') this.pokeWeb();
+      else if (c.type === 'url') { if (c.kind === 'yt') this.ytCmd(p ? 'pauseVideo' : 'playVideo'); else this.pokeWeb(); }
     }
 
     applyPerf() {

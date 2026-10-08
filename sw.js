@@ -1,5 +1,5 @@
 // Offline cache. Change VERSION when you update the files so phones fetch the new ones.
-const VERSION = 'spiral-stage-v1';
+const VERSION = 'spiral-stage-v2';
 const FILES = ['./', 'index.html', 'app.js', 'spiral.js', 'style.css', 'web.css', 'web.js', 'manifest.json', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {
