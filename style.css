@@ -144,14 +144,14 @@ input[type="number"] {
 .btnrow button { padding: 4px 10px; font-size: 12px; }
 #presetCard .btnrow button { padding: 6px 14px; font-size: 14px; }
 
-#aList { list-style: none; margin: 8px 0; padding: 0; max-height: 150px; overflow-y: auto; }
-#aList:empty { display: none; }
-#aList li { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px; cursor: pointer; }
-#aList li:hover { background: var(--ink); }
-#aList li.cur { background: var(--line); }
-#aList li .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#aList li .x { color: var(--muted); padding: 0 4px; }
-#aList li .x:hover { color: var(--text); }
+.alist { list-style: none; margin: 8px 0; padding: 0; max-height: 150px; overflow-y: auto; }
+.alist:empty { display: none; }
+.alist li { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px; cursor: pointer; }
+.alist li:hover { background: var(--ink); }
+.alist li.cur { background: var(--line); }
+.alist li .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.alist li .x { color: var(--muted); padding: 0 4px; }
+.alist li .x:hover { color: var(--text); }
 
 .subcard { margin: 8px 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: rgba(0, 0, 0, 0.15); }
 .subcard .btnrow button { padding: 5px 10px; font-size: 13px; }
@@ -168,3 +168,10 @@ input[type="number"] {
 .ev .fields label.wide2 { grid-column: 1 / -1; }
 .ev .fields input, .ev .fields select { margin-top: 2px; }
 #sessionCard.playing #seList, #sessionCard.playing #seAdd, #sessionCard.playing #seStart { pointer-events: none; opacity: 0.55; }
+
+.layerhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 8px; }
+.layerhead h2 { margin: 0; }
+.layerhead .danger { padding: 4px 10px; font-size: 12px; background: transparent; border: 1px solid var(--line, #3a3260); color: #ff9aa8; }
+.addrow { margin: 0 0 14px; }
+.addrow button { width: 100%; }
+label.check.inl { display: inline-flex; align-items: center; gap: 6px; }
