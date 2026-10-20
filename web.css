@@ -19,3 +19,5 @@ input[type="range"] { min-height: 32px; }
   #panel { overflow-y: auto; padding-bottom: 12px; }
   #app.nopanel { grid-template-columns: 1fr; }
 }
+[data-k="dirBtn"] { display: none; }
+[data-k="addDir"] { display: none; }

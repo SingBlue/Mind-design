@@ -9,6 +9,8 @@
   const effFps = () => (state.overlay && state.auto) ? (state.fps === 0 ? 30 : Math.min(state.fps, 30)) : state.fps;
   const effScale = () => (state.overlay && state.auto) ? Math.min(state.scale, 0.5) : state.scale;
   const layers = [];
+  const MAX_LAYERS = (window.matchMedia && matchMedia('(pointer: coarse)').matches) ? 4 : 8;
+  const VIDEO_EXT = /\.(mp4|m4v|mov|webm|mkv|avi|wmv|mpg|mpeg|ogv|ogg|3gp|ts|flv)$/i;
 
   const hexToRgb = (h) => {
     const n = parseInt(h.slice(1), 16);
@@ -55,14 +57,18 @@
   }
 
   // ---------------------------------------------------------------- Layers
-  const SKIP_GENERIC = ['source', 'fileInput', 'urlInput', 'fileSeek', 'webSeek'];
-  const SKIP_SNAPSHOT = ['fileInput', 'fileSeek', 'webSeek'];
+  const SKIP_GENERIC = ['source', 'fileInput', 'dirInput', 'urlInput', 'fileSeek', 'webSeek'];
+  const SKIP_SNAPSHOT = ['fileInput', 'dirInput', 'fileSeek', 'webSeek'];
 
   class Layer {
     constructor(index) {
       this.index = index;
       this.cur = null;
-      this.media = null;          // { name, path, file }
+      this.media = null;          // current item { name, path, file }
+      this.list = [];             // playlist of items
+      this.idx = 0;
+      this.history = [];
+      this.fails = 0;
       this.objectUrl = null;
       this.timer = null;
       this.seekTimer = null;
@@ -77,9 +83,23 @@
 
       this.ui = $('#layerTpl').content.firstElementChild.cloneNode(true);
       $('#layers').appendChild(this.ui);
-      this.q('title').textContent = index === 0 ? 'Layer 1 (bottom)' : 'Layer 2 (top)';
       this.wire();
+      this.setIndex(index);
       this.refreshOutputs();
+    }
+
+    setIndex(i) {
+      this.index = i;
+      this.root.style.zIndex = String(i + 1);
+      this.q('title').textContent = 'Layer ' + (i + 1) + (i === 0 ? ' (bottom)' : '');
+      const rm = this.q('layerRemove');
+      if (rm) rm.hidden = false;
+    }
+
+    destroy() {
+      this.teardown();
+      this.root.remove();
+      this.ui.remove();
     }
 
     q(k) { return this.ui.querySelector(`[data-k="${k}"]`); }
@@ -106,10 +126,20 @@
       this.q('source').addEventListener('change', () => this.setSource(this.v('source')));
       this.q('fileBtn').addEventListener('click', () => this.q('fileInput').click());
       this.q('fileInput').addEventListener('change', (e) => {
-        const f = e.target.files[0];
-        if (f) this.loadFile(f);
+        const fs = Array.from(e.target.files || []);
+        if (fs.length) this.loadFiles(fs);
         e.target.value = '';
       });
+      this.q('dirBtn').addEventListener('click', () => this.q('dirInput').click());
+      this.q('dirInput').addEventListener('change', (e) => {
+        const fs = Array.from(e.target.files || []).filter((f) => (f.type || '').startsWith('video/') || VIDEO_EXT.test(f.name));
+        if (fs.length) this.loadFiles(fs);
+        else if (e.target.files && e.target.files.length) toast('No video files were found in that folder.');
+        e.target.value = '';
+      });
+      this.q('plPrev').addEventListener('click', () => this.prev());
+      this.q('plNext').addEventListener('click', () => this.next(false));
+      this.q('layerRemove').addEventListener('click', () => removeLayer(this));
       this.q('urlGo').addEventListener('click', () => this.setSource('url'));
       this.q('urlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') this.setSource('url'); });
 
@@ -126,12 +156,69 @@
     }
 
     // ---- sources
-    loadFile(file) {
-      const path = api && api.getPath ? api.getPath(file) : '';
-      this.media = { name: file.name, path, file };
-      this.q('fileName').textContent = file.name;
+    loadFile(file) { this.loadFiles([file]); }
+
+    loadFiles(files) {
+      const items = files.map((file) => ({
+        name: (file.webkitRelativePath || file.name),
+        path: api && api.getPath ? api.getPath(file) : '',
+        file
+      }));
+      items.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+      this.list = items;
+      this.idx = 0;
+      this.history = [];
+      this.fails = 0;
+      this.media = items[0];
       this.q('source').value = 'file';
       this.setSource('file');
+    }
+
+    updatePlaylistUi() {
+      const n = this.list.length;
+      this.q('fileName').textContent = this.media ? this.media.name.split('/').pop() : 'No file chosen';
+      this.q('plRow').hidden = n < 2;
+      this.q('plPos').textContent = n > 1 ? `${this.idx + 1} / ${n}` : '';
+    }
+
+    // move to another item of the playlist, reusing the same <video>
+    playIndex(i, pushHistory = true) {
+      const c = this.cur;
+      if (!c || c.type !== 'file' || !this.list.length) return;
+      if (pushHistory && i !== this.idx) this.history.push(this.idx);
+      this.idx = i;
+      this.media = this.list[i];
+      if (this.objectUrl) { URL.revokeObjectURL(this.objectUrl); this.objectUrl = null; }
+      const m = this.media;
+      if (m.path) c.node.src = fileUrl(m.path);
+      else if (m.file) { this.objectUrl = URL.createObjectURL(m.file); c.node.src = this.objectUrl; }
+      this.ab = { a: null, b: null };
+      this.updateAB();
+      this.updatePlaylistUi();
+      if (!state.paused) c.node.play().catch(() => {});
+    }
+
+    next(auto) {
+      const n = this.list.length;
+      if (n < 2) return;
+      let i;
+      if (this.v('shuffle')) {
+        do { i = Math.floor(Math.random() * n); } while (i === this.idx);
+      } else {
+        i = this.idx + 1;
+        if (i >= n) {
+          if (auto && !this.v('loop')) return; // end of list, loop is off
+          i = 0;
+        }
+      }
+      this.playIndex(i);
+    }
+
+    prev() {
+      const n = this.list.length;
+      if (n < 2) return;
+      const i = this.history.length ? this.history.pop() : (this.idx - 1 + n) % n;
+      this.playIndex(i, false);
     }
 
     setSource(type) {
@@ -140,7 +227,7 @@
       this.updateAB();
       this.ui.querySelectorAll('[data-g]').forEach((g) => { g.hidden = g.dataset.g !== type; });
       if (type === 'spiral') this.buildSpiral();
-      else if (type === 'file' && this.media) this.buildFile();
+      else if (type === 'file' && this.media) { this.buildFile(); }
       else if (type === 'url' && this.q('urlInput').value.trim()) this.buildUrl(this.q('urlInput').value);
       this.apply();
     }
@@ -176,19 +263,29 @@
     }
 
     buildFile() {
-      const m = this.media;
       const vid = document.createElement('video');
       vid.className = 'fill';
-      if (m.path) vid.src = fileUrl(m.path);
-      else if (m.file) { this.objectUrl = URL.createObjectURL(m.file); vid.src = this.objectUrl; }
       vid.loop = true;
       vid.playsInline = true;
-      vid.addEventListener('error', () => toast(`Couldn't play "${m.name}". Choose the video again.`));
+      vid.addEventListener('error', () => this.onVideoError());
+      vid.addEventListener('playing', () => { this.fails = 0; });
+      vid.addEventListener('ended', () => { if (this.list.length > 1) this.next(true); });
       this.root.appendChild(vid);
       this.cur = { type: 'file', node: vid };
-      this.q('fileName').textContent = m.name;
-      if (!state.paused) vid.play().catch(() => {});
       this.seekTimer = setInterval(() => this.tick(), 200);
+      this.playIndex(this.idx, false);
+    }
+
+    onVideoError() {
+      const name = this.media ? this.media.name.split('/').pop() : 'this video';
+      this.fails++;
+      if (this.list.length > 1 && this.fails < this.list.length) {
+        toast(`Skipped "${name}". Its format is not supported. Convert it to MP4 (H.264 video + AAC audio) to play it.`, 6000);
+        this.next(true);
+        if (this.list.length > 1 && this.idx === 0 && !this.v('loop')) return;
+        return;
+      }
+      toast(`Can't play "${name}". The format may not be supported here (common with AVI, WMV, or HEVC/H.265 files). Convert it to MP4 with H.264 video and AAC audio, for example with the free HandBrake.`, 12000);
     }
 
     buildUrl(raw) {
@@ -326,6 +423,7 @@
       if (!c) return;
       if (c.type === 'spiral') {
         Object.assign(c.r.params, {
+          mode: Number(this.v('pattern')) || 0,
           speed: this.v('speed'),
           arms: Math.round(this.v('arms')),
           twist: this.v('twist'),
@@ -338,7 +436,7 @@
         });
         if (!c.r.running) c.r.draw();
       } else if (c.type === 'file') {
-        c.node.loop = this.v('loop');
+        c.node.loop = this.list.length <= 1 ? this.v('loop') : false;
         c.node.playbackRate = this.v('rate');
         c.node.volume = this.v('volume');
         c.node.style.objectFit = this.v('fit');
@@ -376,6 +474,8 @@
       return {
         values,
         media: this.media ? { name: this.media.name, path: this.media.path } : null,
+        list: this.list.filter((i) => i.path).map((i) => ({ name: i.name, path: i.path })),
+        idx: this.idx,
         ab: this.ab
       };
     }
@@ -388,7 +488,12 @@
         if (el.type === 'checkbox') el.checked = !!val; else el.value = val;
       }
       this.refreshOutputs();
-      this.media = s.media && s.media.path ? { name: s.media.name, path: s.media.path, file: null } : null;
+      this.list = Array.isArray(s.list) && s.list.length
+        ? s.list.map((i) => ({ name: i.name, path: i.path, file: null }))
+        : (s.media && s.media.path ? [{ name: s.media.name, path: s.media.path, file: null }] : []);
+      this.idx = Math.min(Math.max(parseInt(s.idx, 10) || 0, 0), Math.max(this.list.length - 1, 0));
+      this.history = [];
+      this.media = this.list[this.idx] || null;
       let src = this.v('source');
       if (src === 'file' && !this.media) { src = 'off'; this.q('source').value = 'off'; }
       this.setSource(src);
@@ -779,7 +884,7 @@
   const bg = new BgEngine(tone);
 
   function updateOuts() {
-    [['bgVol', (v) => Math.round(v * 100) + '%'], ['aVol', (v) => Math.round(v * 100) + '%'], ['aSpeed', (v) => v + 'x']].forEach(([id, f]) => {
+    [['bgVol', (v) => Math.round(v * 100) + '%']].forEach(([id, f]) => {
       const r = $('#' + id);
       r.parentElement.querySelector('output').textContent = f(parseFloat(r.value));
     });
@@ -794,11 +899,11 @@
   $('#bgVol').addEventListener('input', (e) => { bg.setVolume(parseFloat(e.target.value)); updateOuts(); });
   bg.volume = parseFloat($('#bgVol').value);
 
-  // ---------------------------------------------------------------- Audio files
-  const audio = new Audio();
-  audio.preload = 'auto';
-  const pl = { items: [], idx: -1 };
-  let aSeeking = false, aWas = false, aFade = 1;
+  // ---------------------------------------------------------------- Audio boxes
+  const audios = [];
+  const MAX_AUDIOS = (window.matchMedia && matchMedia('(pointer: coarse)').matches) ? 3 : 6;
+  let aFade = 1;
+  const AUDIO_EXT = /\.(mp3|wav|ogg|oga|m4a|aac|flac|opus|wma|aif|aiff|webm)$/i;
 
   const plUrl = (it) => {
     if (it.path) return fileUrl(it.path);
@@ -806,99 +911,247 @@
     return it.blob || '';
   };
 
-  function applyAudioSettings() {
-    audio.volume = Math.min(1, parseFloat($('#aVol').value) * aFade);
-    audio.playbackRate = parseFloat($('#aSpeed').value);
-    audio.loop = $('#aLoop').value === 'one';
-  }
-
-  function renderList() {
-    const ul = $('#aList');
-    ul.innerHTML = '';
-    pl.items.forEach((it, i) => {
-      const li = document.createElement('li');
-      if (i === pl.idx) li.className = 'cur';
-      const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = it.name;
-      const x = document.createElement('span'); x.className = 'x'; x.textContent = '✕'; x.title = 'Remove';
-      x.addEventListener('click', (e) => { e.stopPropagation(); removeTrack(i); });
-      li.addEventListener('click', () => playTrack(i));
-      li.append(nm, x);
-      ul.appendChild(li);
-    });
-    $('#aEmpty').hidden = pl.items.length > 0;
-    $('#aPlay').textContent = (!audio.paused && !audio.ended) ? 'Pause' : 'Play';
-  }
-
-  function playTrack(i) {
-    const n = pl.items.length;
-    if (!n) return;
-    pl.idx = ((i % n) + n) % n;
-    audio.src = plUrl(pl.items[pl.idx]);
-    applyAudioSettings();
-    if (!state.paused) audio.play().catch(() => {}); else aWas = true;
-    renderList();
-  }
-
-  function nextIndex(dir) {
-    const n = pl.items.length;
-    if (n > 1 && $('#aShuffle').checked && dir > 0) {
-      let j; do { j = Math.floor(Math.random() * n); } while (j === pl.idx);
-      return j;
+  class AudioBox {
+    constructor(index) {
+      this.audio = new Audio();
+      this.audio.preload = 'auto';
+      this.items = [];
+      this.idx = -1;
+      this.seeking = false;
+      this.was = false;
+      this.ab = { a: null, b: null };
+      this.ui = $('#audioTpl').content.firstElementChild.cloneNode(true);
+      $('#audioBoxes').appendChild(this.ui);
+      this.wire();
+      this.setIndex(index);
+      this.render();
+      this.settings();
     }
-    return pl.idx + dir;
+
+    q(k) { return this.ui.querySelector(`[data-k="${k}"]`); }
+
+    setIndex(i) {
+      this.index = i;
+      this.q('title').textContent = 'Audio ' + (i + 1);
+    }
+
+    settings() {
+      const a = this.audio;
+      a.volume = Math.min(1, parseFloat(this.q('vol').value) * aFade);
+      a.playbackRate = parseFloat(this.q('speed').value);
+      a.loop = this.q('loop').value === 'one';
+      this.q('vol').parentElement.querySelector('output').textContent = Math.round(parseFloat(this.q('vol').value) * 100) + '%';
+      this.q('speed').parentElement.querySelector('output').textContent = this.q('speed').value + 'x';
+    }
+
+    render() {
+      const ul = this.q('list');
+      ul.innerHTML = '';
+      this.items.forEach((it, i) => {
+        const li = document.createElement('li');
+        if (i === this.idx) li.className = 'cur';
+        const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = it.name;
+        const x = document.createElement('span'); x.className = 'x'; x.textContent = '✕'; x.title = 'Remove';
+        x.addEventListener('click', (e) => { e.stopPropagation(); this.removeTrack(i); });
+        li.addEventListener('click', () => this.playTrack(i));
+        li.append(nm, x);
+        ul.appendChild(li);
+      });
+      this.q('empty').hidden = this.items.length > 0;
+      this.q('play').textContent = (!this.audio.paused && !this.audio.ended) ? 'Pause' : 'Play';
+    }
+
+    playTrack(i) {
+      const n = this.items.length;
+      if (!n) return;
+      this.idx = ((i % n) + n) % n;
+      this.ab = { a: null, b: null };
+      this.updateAB();
+      this.audio.src = plUrl(this.items[this.idx]);
+      this.settings();
+      if (!state.paused) this.audio.play().catch(() => {}); else this.was = true;
+      this.render();
+    }
+
+    addFiles(files, sort) {
+      const wasEmpty = this.items.length === 0;
+      let add = files.map((f) => ({ name: f.name, path: api && api.getPath ? api.getPath(f) : '', file: f }));
+      if (sort) add.sort((x, y) => x.name.localeCompare(y.name, undefined, { numeric: true, sensitivity: 'base' }));
+      this.items.push(...add);
+      this.render();
+      if (wasEmpty && this.items.length) this.playTrack(0);
+    }
+
+    nextIndex(dir) {
+      const n = this.items.length;
+      if (n > 1 && this.q('shuffle').checked && dir > 0) {
+        let j; do { j = Math.floor(Math.random() * n); } while (j === this.idx);
+        return j;
+      }
+      return this.idx + dir;
+    }
+
+    removeTrack(i) {
+      const it = this.items[i];
+      if (it && it.blob) URL.revokeObjectURL(it.blob);
+      this.items.splice(i, 1);
+      if (i === this.idx) { this.audio.pause(); this.audio.removeAttribute('src'); this.idx = -1; }
+      else if (i < this.idx) this.idx--;
+      this.render();
+    }
+
+    wire() {
+      const a = this.audio;
+      a.addEventListener('ended', () => {
+        const mode = this.q('loop').value;
+        if (mode === 'one') return;
+        const n = this.items.length;
+        if (mode === 'all' || this.idx < n - 1) this.playTrack(this.nextIndex(1)); else this.render();
+      });
+      a.addEventListener('play', () => this.render());
+      a.addEventListener('pause', () => this.render());
+      a.addEventListener('error', () => { if (a.src) toast("Couldn't play that audio file. Add it again, or convert it to MP3.", 5000); });
+      a.addEventListener('timeupdate', () => {
+        const dd = a.duration, t = a.currentTime;
+        const ok = isFinite(dd) && dd > 0;
+        this.q('time').textContent = ok ? `${fmtTime(t)} / ${fmtTime(dd)}` : '0:00 / 0:00';
+        this.q('seek').disabled = !ok;
+        if (ok && !this.seeking) this.q('seek').value = Math.round((t / dd) * 1000);
+      });
+      this.q('add').addEventListener('click', () => this.q('input').click());
+      this.q('input').addEventListener('change', (e) => {
+        this.addFiles([...e.target.files]);
+        e.target.value = '';
+      });
+      this.q('addDir').addEventListener('click', () => this.q('dirInput').click());
+      this.q('dirInput').addEventListener('change', (e) => {
+        const all = [...e.target.files];
+        const fs = all.filter((f) => (f.type || '').startsWith('audio/') || AUDIO_EXT.test(f.name));
+        if (fs.length) this.addFiles(fs, true);
+        else if (all.length) toast('No audio files were found in that folder.');
+        e.target.value = '';
+      });
+      this.q('play').addEventListener('click', () => {
+        if (!this.items.length) return;
+        if (this.idx < 0) { this.playTrack(0); return; }
+        if (a.paused) { this.was = false; a.play().catch(() => {}); } else a.pause();
+      });
+      this.q('next').addEventListener('click', () => { if (this.items.length) this.playTrack(this.nextIndex(1)); });
+      this.q('prev').addEventListener('click', () => { if (this.items.length) this.playTrack(this.idx - 1); });
+      const seek = this.q('seek');
+      seek.addEventListener('pointerdown', () => { this.seeking = true; });
+      seek.addEventListener('pointerup', () => { this.seeking = false; });
+      seek.addEventListener('change', () => { this.seeking = false; });
+      seek.addEventListener('input', (e) => {
+        if (isFinite(a.duration)) a.currentTime = (parseFloat(e.target.value) / 1000) * a.duration;
+      });
+      ['vol', 'speed', 'loop'].forEach((k) => {
+        this.q(k).addEventListener('input', () => this.settings());
+        this.q(k).addEventListener('change', () => this.settings());
+      });
+      this.q('abA').addEventListener('click', () => this.setAB('a'));
+      this.q('abB').addEventListener('click', () => this.setAB('b'));
+      this.q('abClear').addEventListener('click', () => { this.ab = { a: null, b: null }; this.updateAB(); });
+      this.abTimer = setInterval(() => this.abCheck(), 100);
+      this.q('remove').addEventListener('click', () => removeAudio(this));
+    }
+
+    setAB(which) {
+      if (!this.audio.src) return;
+      this.ab[which] = this.audio.currentTime;
+      this.updateAB();
+    }
+
+    updateAB() {
+      const { a, b } = this.ab;
+      const parts = [];
+      if (a != null) parts.push('A ' + fmtTime(a));
+      if (b != null) parts.push('B ' + fmtTime(b));
+      let txt = parts.join('   ');
+      if (a != null && b != null && b <= a) txt += '  (B must be after A)';
+      this.q('abLabel').textContent = txt;
+    }
+
+    abCheck() {
+      const { a, b } = this.ab;
+      const au = this.audio;
+      if (a != null && b != null && b > a && !au.paused && au.currentTime >= b) au.currentTime = a;
+    }
+
+    setFade(f) { aFade = f; this.settings(); }
+
+    setPaused(p, was) {
+      const a = this.audio;
+      if (p && !was) { this.was = !a.paused; a.pause(); }
+      else if (!p && was) { if (this.was && a.src) a.play().catch(() => {}); this.was = false; }
+    }
+
+    snapshot() {
+      return {
+        vals: { aLoop: this.q('loop').value, aShuffle: this.q('shuffle').checked, aVol: this.q('vol').value, aSpeed: this.q('speed').value },
+        items: this.items.filter((i) => i.path).map((i) => ({ name: i.name, path: i.path }))
+      };
+    }
+
+    restore(s) {
+      const v = (s && s.vals) || {};
+      if (v.aLoop) this.q('loop').value = v.aLoop;
+      this.q('shuffle').checked = !!v.aShuffle;
+      if (v.aVol != null) this.q('vol').value = v.aVol;
+      if (v.aSpeed != null) this.q('speed').value = v.aSpeed;
+      this.audio.pause(); this.audio.removeAttribute('src');
+      this.items.forEach((i) => { if (i.blob) URL.revokeObjectURL(i.blob); });
+      this.items = ((s && s.items) || []).map((i) => ({ name: i.name, path: i.path, file: null }));
+      this.idx = -1;
+      this.ab = { a: null, b: null };
+      this.updateAB();
+      this.settings(); this.render();
+    }
+
+    destroy() {
+      clearInterval(this.abTimer);
+      this.audio.pause();
+      this.audio.removeAttribute('src');
+      this.items.forEach((i) => { if (i.blob) URL.revokeObjectURL(i.blob); });
+      this.ui.remove();
+    }
   }
 
-  function removeTrack(i) {
-    const it = pl.items[i];
-    if (it && it.blob) URL.revokeObjectURL(it.blob);
-    pl.items.splice(i, 1);
-    if (i === pl.idx) { audio.pause(); audio.removeAttribute('src'); pl.idx = -1; }
-    else if (i < pl.idx) pl.idx--;
-    renderList();
+  function makeAudio() {
+    const A = new AudioBox(audios.length);
+    audios.push(A);
+    audios.forEach((x, i) => x.setIndex(i));
+    return A;
   }
 
-  audio.addEventListener('ended', () => {
-    const mode = $('#aLoop').value;
-    if (mode === 'one') return;
-    const n = pl.items.length;
-    if (mode === 'all' || pl.idx < n - 1) playTrack(nextIndex(1)); else renderList();
-  });
-  audio.addEventListener('play', renderList);
-  audio.addEventListener('pause', renderList);
-  audio.addEventListener('error', () => { if (audio.src) toast("Couldn't play that audio file. Add it again.", 4000); });
-  audio.addEventListener('timeupdate', () => {
-    const d = audio.duration, t = audio.currentTime;
-    const ok = isFinite(d) && d > 0;
-    $('#aTime').textContent = ok ? `${fmtTime(t)} / ${fmtTime(d)}` : '0:00 / 0:00';
-    $('#aSeek').disabled = !ok;
-    if (ok && !aSeeking) $('#aSeek').value = Math.round((t / d) * 1000);
-  });
+  function addAudio() {
+    if (audios.length >= MAX_AUDIOS) { toast(`You can have up to ${MAX_AUDIOS} audio boxes on this device.`, 4000); return; }
+    const A = makeAudio();
+    renderEvents();
+    A.ui.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 
-  $('#aAdd').addEventListener('click', () => $('#aInput').click());
-  $('#aInput').addEventListener('change', (e) => {
-    const wasEmpty = pl.items.length === 0;
-    [...e.target.files].forEach((f) => {
-      pl.items.push({ name: f.name, path: api && api.getPath ? api.getPath(f) : '', file: f });
-    });
-    e.target.value = '';
-    renderList();
-    if (wasEmpty && pl.items.length) playTrack(0);
-  });
-  $('#aPlay').addEventListener('click', () => {
-    if (!pl.items.length) return;
-    if (pl.idx < 0) { playTrack(0); return; }
-    if (audio.paused) { aWas = false; audio.play().catch(() => {}); } else audio.pause();
-  });
-  $('#aNext').addEventListener('click', () => { if (pl.items.length) playTrack(nextIndex(1)); });
-  $('#aPrev').addEventListener('click', () => { if (pl.items.length) playTrack(pl.idx - 1); });
-  $('#aSeek').addEventListener('pointerdown', () => { aSeeking = true; });
-  $('#aSeek').addEventListener('pointerup', () => { aSeeking = false; });
-  $('#aSeek').addEventListener('change', () => { aSeeking = false; });
-  $('#aSeek').addEventListener('input', (e) => {
-    if (isFinite(audio.duration)) audio.currentTime = (parseFloat(e.target.value) / 1000) * audio.duration;
-  });
-  ['aVol', 'aSpeed', 'aLoop'].forEach((id) => $('#' + id).addEventListener('input', () => { applyAudioSettings(); updateOuts(); }));
-  $('#aLoop').addEventListener('change', applyAudioSettings);
+  function removeAudio(A) {
+    if (audios.length <= 1) { toast('Keep at least one audio box.', 3000); return; }
+    const i = audios.indexOf(A);
+    if (i < 0) return;
+    A.destroy();
+    audios.splice(i, 1);
+    audios.forEach((x, k) => x.setIndex(k));
+    renderEvents();
+    saveSoon();
+  }
+
+  function ensureAudios(n) {
+    while (audios.length < n) makeAudio();
+    while (audios.length > n && audios.length > 1) audios.pop().destroy();
+    audios.forEach((x, k) => x.setIndex(k));
+  }
+
+  function audioOpts() { return audios.map((_, i) => [String(i + 1), 'Audio ' + (i + 1)]); }
+
+  const addAudioBtn = $('#addAudio');
+  if (addAudioBtn) addAudioBtn.addEventListener('click', addAudio);
 
   // ---------------------------------------------------------------- Session timer
   const timer = { id: null, end: 0, total: 0, fadeMs: 0, last: 0 };
@@ -910,8 +1163,7 @@
     fadeMul = f;
     tone.setFade(f);
     bg.setFade(f);
-    aFade = f;
-    applyAudioSettings();
+    audios.forEach((a) => a.setFade(f));
     applyStageOpacity();
   }
 
@@ -927,7 +1179,7 @@
     timerStop('Session finished.');
     tone.stop(true);
     bg.stop(true);
-    audio.pause();
+    audios.forEach((a) => a.audio.pause());
     toneRefreshUi();
     updateOuts();
     if (state.overlay) setOverlay(false);
@@ -963,25 +1215,32 @@
   const sess = { events: [], start: null };
   const run = { id: null, clock: 0, last: 0, idx: 0, list: [], ramps: [], endFade: null };
 
-  const TARGETS = [];
-  [1, 2].forEach((n) => {
-    TARGETS.push([`l${n}.speed`, `Layer ${n} spiral: speed`], [`l${n}.arms`, `Layer ${n} spiral: arms`],
-      [`l${n}.twist`, `Layer ${n} spiral: tightness`], [`l${n}.soft`, `Layer ${n} spiral: edge softness`],
-      [`l${n}.pulse`, `Layer ${n} spiral: pulse`], [`l${n}.opacity`, `Layer ${n}: opacity`]);
-  });
-  TARGETS.push(['flash.interval', 'Flash text: every (s)'], ['flash.duration', 'Flash text: shown for (ms)'],
+  const TARGETS_TAIL = [['flash.interval', 'Flash text: every (s)'], ['flash.duration', 'Flash text: shown for (ms)'],
     ['flash.size', 'Flash text: size'], ['flash.opacity', 'Flash text: opacity'],
     ['tone.volume', 'Tone: volume'], ['tone.freq', 'Tone: frequency (Hz)'], ['tone.beat', 'Tone: beat (Hz)'],
-    ['bg.volume', 'Background sound: volume'], ['audio.volume', 'Audio file: volume'],
-    ['audio.speed', 'Audio file: speed'], ['master', 'Master opacity']);
+    ['bg.volume', 'Background sound: volume'], ['master', 'Master opacity']];
+  function targetList() {
+    const t = [];
+    layers.forEach((_, i) => {
+      const n = i + 1;
+      t.push([`l${n}.speed`, `Layer ${n} spiral: speed`], [`l${n}.arms`, `Layer ${n} spiral: arms`],
+        [`l${n}.twist`, `Layer ${n} spiral: tightness`], [`l${n}.soft`, `Layer ${n} spiral: edge softness`],
+        [`l${n}.pulse`, `Layer ${n} spiral: pulse`], [`l${n}.opacity`, `Layer ${n}: opacity`]);
+    });
+    audios.forEach((_, i) => {
+      const n = i + 1;
+      t.push([`a${n}.volume`, `Audio ${n}: volume`], [`a${n}.speed`, `Audio ${n}: speed`]);
+    });
+    return t.concat(TARGETS_TAIL);
+  }
+  function layerOpts() { return layers.map((_, i) => [String(i + 1), 'Layer ' + (i + 1)]); }
   const TARGET_SEL = {
     'flash.interval': '#fInterval', 'flash.duration': '#fDuration', 'flash.size': '#fSize', 'flash.opacity': '#fOpacity',
     'tone.volume': '#tVol', 'tone.freq': '#tFreq', 'tone.beat': '#tBeat', 'bg.volume': '#bgVol',
-    'audio.volume': '#aVol', 'audio.speed': '#aSpeed', master: '#mOpacity'
+    master: '#mOpacity'
   };
   const BG_KINDS = [['rain', 'Rain'], ['ocean', 'Ocean waves'], ['wind', 'Wind'], ['brown', 'Brown noise'], ['pink', 'Pink noise'], ['white', 'White noise']];
   const ON_OFF = [['1', 'On'], ['0', 'Off']];
-  const LAYER_OPTS = [['1', 'Layer 1'], ['2', 'Layer 2']];
   const TYPE_LABEL = {
     set: 'Change a setting', colors: 'Change spiral colors', layer: 'Show or hide a layer', flash: 'Flashing text',
     script: 'Switch flash script', tone: 'Tone', bg: 'Background sound', audio: 'Audio file', end: 'End the session'
@@ -989,12 +1248,14 @@
   const DEFAULTS = {
     set: { target: 'l1.speed', value: 1, ramp: 0 }, colors: { layer: '1', a: '#8f6bff', b: '#0d0820' },
     layer: { layer: '1', source: 'spiral' }, flash: { on: '1' }, script: { name: '' }, tone: { on: '1' },
-    bg: { on: '1', kind: 'rain' }, audio: { action: 'play' }, end: { fade: 30 }
+    bg: { on: '1', kind: 'rain' }, audio: { box: '1', action: 'play' }, end: { fade: 30 }
   };
 
   function ctlFor(target) {
-    const m = /^l([12])\.(.+)$/.exec(target);
-    if (m) return layers[Number(m[1]) - 1].q(m[2]);
+    const m = /^l(\d+)\.(.+)$/.exec(target);
+    if (m) { const L = layers[Number(m[1]) - 1]; return L ? L.q(m[2]) : null; }
+    const am = /^(?:a(\d+)|audio)\.(volume|speed)$/.exec(target);
+    if (am) { const A = audios[(am[1] ? Number(am[1]) : 1) - 1]; return A ? A.q(am[2] === 'volume' ? 'vol' : 'speed') : null; }
     return TARGET_SEL[target] ? $(TARGET_SEL[target]) : null;
   }
 
@@ -1018,14 +1279,14 @@
 
   function fieldDefs(e) {
     switch (e.type) {
-      case 'set': return [['target', 'select', TARGETS, 'Setting', true], ['value', 'number', null, 'Value'], ['ramp', 'number', null, 'Change gradually over (s)', true]];
-      case 'colors': return [['layer', 'select', LAYER_OPTS, 'Layer'], ['a', 'color', null, 'Band color'], ['b', 'color', null, 'Dark color']];
-      case 'layer': return [['layer', 'select', LAYER_OPTS, 'Layer'], ['source', 'select', [['off', 'Off'], ['spiral', 'Built-in spiral']], 'Show']];
+      case 'set': return [['target', 'select', targetList(), 'Setting', true], ['value', 'number', null, 'Value'], ['ramp', 'number', null, 'Change gradually over (s)', true]];
+      case 'colors': return [['layer', 'select', layerOpts(), 'Layer'], ['a', 'color', null, 'Band color'], ['b', 'color', null, 'Dark color']];
+      case 'layer': return [['layer', 'select', layerOpts(), 'Layer'], ['source', 'select', [['off', 'Off'], ['spiral', 'Built-in spiral']], 'Show']];
       case 'flash': return [['on', 'select', ON_OFF, 'Flashing text']];
       case 'script': return [['name', 'select', scriptOptions(), 'Script (saved in Subliminal text)', true]];
       case 'tone': return [['on', 'select', ON_OFF, 'Tone (uses your tone settings)', true]];
       case 'bg': return [['on', 'select', ON_OFF, 'Sound'], ['kind', 'select', BG_KINDS, 'Type']];
-      case 'audio': return [['action', 'select', [['play', 'Play'], ['pause', 'Pause'], ['next', 'Next track']], 'Action', true]];
+      case 'audio': return [['box', 'select', audioOpts(), 'Audio box'], ['action', 'select', [['play', 'Play'], ['pause', 'Pause'], ['next', 'Next track']], 'Action', true]];
       case 'end': return [['fade', 'number', null, 'Fade everything out over (s)', true]];
       default: return [];
     }
@@ -1190,10 +1451,14 @@
         updateOuts();
         break;
       case 'audio':
-        if (e.action === 'play') { if (pl.items.length) { if (pl.idx < 0) playTrack(0); else audio.play().catch(() => {}); } }
-        else if (e.action === 'pause') audio.pause();
-        else if (e.action === 'next') { if (pl.items.length) playTrack(nextIndex(1)); }
+      {
+        const A = audios[(Number(e.box) || 1) - 1];
+        if (!A) break;
+        if (e.action === 'play') { if (A.items.length) { if (A.idx < 0) A.playTrack(0); else A.audio.play().catch(() => {}); } }
+        else if (e.action === 'pause') A.audio.pause();
+        else if (e.action === 'next') { if (A.items.length) A.playTrack(A.nextIndex(1)); }
         break;
+      }
       case 'end':
         run.endFade = { t0: now, dur: Math.max(0, (Number(e.fade) || 0) * 1000) };
         break;
@@ -1340,8 +1605,7 @@
     state.paused = p;
     layers.forEach((l) => l.setPaused(p));
     if (p) { flashStop(); tone.suspend(); } else { flashSchedule(); tone.resume(); }
-    if (p && !was) { aWas = !audio.paused; audio.pause(); }
-    else if (!p && was) { if (aWas && audio.src) audio.play().catch(() => {}); aWas = false; }
+    audios.forEach((a) => a.setPaused(p, was));
     $('#btnPause').textContent = p ? 'Resume' : 'Pause';
   }
 
@@ -1446,6 +1710,50 @@
     });
   }
 
+  // ---------------------------------------------------------------- Adding and removing layers
+  function makeLayer() {
+    const L = new Layer(layers.length);
+    layers.push(L);
+    layers.forEach((l, i) => l.setIndex(i));
+    return L;
+  }
+
+  function addLayer() {
+    if (layers.length >= MAX_LAYERS) { toast(`You can have up to ${MAX_LAYERS} layers on this device.`, 4000); return; }
+    const L = makeLayer();
+    L.q('source').value = 'spiral';
+    L.q('opacity').value = 0.5;
+    L.q('reverse').checked = layers.length % 2 === 0;
+    L.q('colorA').value = ['#8f6bff', '#4fd0c0', '#ff7ab8', '#ffd166', '#7ab8ff'][layers.length % 5];
+    L.refreshOutputs();
+    L.setSource('spiral');
+    renderEvents();
+    L.ui.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function removeLayer(L) {
+    if (layers.length <= 1) { toast('Keep at least one layer.', 3000); return; }
+    const i = layers.indexOf(L);
+    if (i < 0) return;
+    L.destroy();
+    layers.splice(i, 1);
+    layers.forEach((l, k) => l.setIndex(k));
+    renderEvents();
+    saveSoon();
+  }
+
+  function ensureLayers(n) {
+    while (layers.length < n) makeLayer();
+    while (layers.length > n && layers.length > 1) {
+      const L = layers.pop();
+      L.destroy();
+    }
+    layers.forEach((l, k) => l.setIndex(k));
+  }
+
+  const addBtn = $('#addLayer');
+  if (addBtn) addBtn.addEventListener('click', addLayer);
+
   // ---------------------------------------------------------------- Presets and last session
   const store = {
     get(key, fallback) {
@@ -1467,10 +1775,7 @@
       perf: { fps: $('#pFps').value, scale: $('#pScale').value, auto: $('#pAuto').checked },
       master: $('#mOpacity').value,
       bg: { bgType: $('#bgType').value, bgVol: $('#bgVol').value },
-      audio: {
-        vals: { aLoop: $('#aLoop').value, aShuffle: $('#aShuffle').checked, aVol: $('#aVol').value, aSpeed: $('#aSpeed').value },
-        items: pl.items.filter((i) => i.path).map((i) => ({ name: i.name, path: i.path }))
-      },
+      audio: { boxes: audios.map((x) => x.snapshot()) },
       timer: { tmMin: $('#tmMin').value, tmFade: $('#tmFade').value },
       session: withSession ? { events: sess.events, start: sess.start } : undefined
     };
@@ -1478,6 +1783,7 @@
 
   function applyData(d) {
     if (!d || !Array.isArray(d.layers)) return;
+    ensureLayers(Math.min(d.layers.length, MAX_LAYERS));
     d.layers.forEach((s, i) => { if (layers[i]) layers[i].restore(s); });
     for (const [id, val] of Object.entries(d.flash || {})) {
       const e = $('#' + id);
@@ -1502,16 +1808,9 @@
       if (bg.playing) bg.start(d.bg.bgType);
     }
     if (d.audio) {
-      const v = d.audio.vals || {};
-      if (v.aLoop) $('#aLoop').value = v.aLoop;
-      $('#aShuffle').checked = !!v.aShuffle;
-      if (v.aVol != null) $('#aVol').value = v.aVol;
-      if (v.aSpeed != null) $('#aSpeed').value = v.aSpeed;
-      audio.pause(); audio.removeAttribute('src');
-      pl.items.forEach((i) => { if (i.blob) URL.revokeObjectURL(i.blob); });
-      pl.items = (d.audio.items || []).map((i) => ({ name: i.name, path: i.path, file: null }));
-      pl.idx = -1;
-      applyAudioSettings(); renderList();
+      const boxes = Array.isArray(d.audio.boxes) ? d.audio.boxes : [d.audio];
+      ensureAudios(Math.min(Math.max(boxes.length, 1), MAX_AUDIOS));
+      boxes.slice(0, audios.length).forEach((s, i) => audios[i].restore(s));
     }
     if (d.session && !run.id) { loadSessionData(d.session); }
     if (d.timer) { $('#tmMin').value = d.timer.tmMin; $('#tmFade').value = d.timer.tmFade; }
@@ -1565,7 +1864,7 @@
   window.addEventListener('beforeunload', saveLast);
 
   // ---------------------------------------------------------------- Start up
-  layers.push(new Layer(0), new Layer(1));
+  makeLayer(); makeLayer(); makeAudio();
   refreshFlashOutputs();
   refreshPresetList();
   refreshScriptList();
@@ -1592,8 +1891,6 @@
   }
   toneRefreshUi();
   updateOuts();
-  renderList();
-  applyAudioSettings();
 
   if (seen) {
     accept();
@@ -1605,5 +1902,6 @@
     });
   }
 
-  window.__spiral = { state, layers, setOverlay, onMode, tone, bg, audio, pl, capture, applyData, sess, run };
+  function saveSoon() { scheduleSave(); }
+  window.__spiral = { state, layers, addLayer, removeLayer, setOverlay, onMode, tone, bg, audios, addAudio, removeAudio, capture, applyData, sess, run };
 })();

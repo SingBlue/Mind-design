@@ -47,6 +47,7 @@
     </section>
 
     <div id="layers"></div>
+    <div class="addrow"><button type="button" id="addLayer">+ Add layer</button></div>
 
     <section class="card" id="flashCard">
       <h2>Subliminal text</h2>
@@ -98,19 +99,8 @@ I am relaxed</textarea></label>
       <label class="row"><span>Volume</span><input type="range" id="bgVol" min="0" max="1" step="0.01" value="0.3"><output></output></label>
     </section>
 
-    <section class="card" id="audioCard">
-      <h2>Audio files</h2>
-      <div class="btnrow"><button id="aAdd">Add audio files&hellip;</button><input type="file" id="aInput" accept="audio/*,.mp3,.wav,.ogg,.m4a,.flac,.aac" multiple hidden></div>
-      <ul id="aList"></ul>
-      <p class="hint" id="aEmpty" style="margin-top:0">No audio yet. Add music, affirmations or any recording.</p>
-      <div class="btnrow"><button id="aPrev">Previous</button><button id="aPlay">Play</button><button id="aNext">Next</button></div>
-      <div class="seek"><input type="range" id="aSeek" min="0" max="1000" step="1" value="0"><span class="time" id="aTime">0:00 / 0:00</span></div>
-      <label class="row"><span>Repeat</span>
-        <select id="aLoop"><option value="all">Whole list</option><option value="one">This track</option><option value="off">Off</option></select></label>
-      <label class="row check"><input type="checkbox" id="aShuffle"><span>Shuffle</span></label>
-      <label class="row"><span>Volume</span><input type="range" id="aVol" min="0" max="1" step="0.01" value="0.8"><output></output></label>
-      <label class="row"><span>Speed</span><input type="range" id="aSpeed" min="0.5" max="1.5" step="0.05" value="1"><output></output></label>
-    </section>
+    <div id="audioBoxes"></div>
+    <div class="addrow"><button type="button" id="addAudio">+ Add audio box</button></div>
 
     <section class="card" id="timerCard">
       <h2>Session timer</h2>
@@ -185,9 +175,26 @@ I am relaxed</textarea></label>
   </div>
 </div>
 
+<template id="audioTpl">
+  <section class="card audiobox">
+    <div class="layerhead"><h2 data-k="title">Audio</h2><button type="button" class="danger" data-k="remove" title="Remove this audio box">Remove</button></div>
+    <div class="btnrow"><button type="button" data-k="add">Add audio files&hellip;</button><button type="button" data-k="addDir">Add folder&hellip;</button><input type="file" data-k="input" accept="audio/*,.mp3,.wav,.ogg,.m4a,.flac,.aac" multiple hidden><input type="file" data-k="dirInput" webkitdirectory hidden></div>
+    <ul class="alist" data-k="list"></ul>
+    <p class="hint" data-k="empty" style="margin-top:0">No audio yet. Add music, affirmations or any recording.</p>
+    <div class="btnrow"><button type="button" data-k="prev">Previous</button><button type="button" data-k="play">Play</button><button type="button" data-k="next">Next</button></div>
+    <div class="seek"><input type="range" data-k="seek" min="0" max="1000" step="1" value="0"><span class="time" data-k="time">0:00 / 0:00</span></div>
+    <div class="btnrow"><button type="button" data-k="abA">Set A</button><button type="button" data-k="abB">Set B</button><button type="button" data-k="abClear">Clear A-B</button><span class="time" data-k="abLabel"></span></div>
+    <label class="row"><span>Repeat</span>
+      <select data-k="loop"><option value="all">Repeat the whole list</option><option value="one">Repeat this track</option><option value="off">No repeat (play once)</option></select></label>
+    <label class="row check"><input type="checkbox" data-k="shuffle"><span>Shuffle</span></label>
+    <label class="row"><span>Volume</span><input type="range" data-k="vol" min="0" max="1" step="0.01" value="0.8"><output></output></label>
+    <label class="row"><span>Speed</span><input type="range" data-k="speed" min="0.5" max="1.5" step="0.05" value="1"><output></output></label>
+  </section>
+</template>
+
 <template id="layerTpl">
   <section class="card">
-    <h2 data-k="title"></h2>
+    <div class="layerhead"><h2 data-k="title"></h2><button type="button" class="danger" data-k="layerRemove" title="Remove this layer">Remove</button></div>
 
     <label class="row"><span>Source</span>
       <select data-k="source">
@@ -198,6 +205,8 @@ I am relaxed</textarea></label>
       </select></label>
 
     <div class="grp" data-g="spiral" hidden>
+      <label class="row"><span>Pattern</span>
+        <select data-k="pattern"><option value="0">Spiral</option><option value="1">Tunnel</option><option value="2">Checker tunnel</option><option value="3">Concentric rings</option><option value="4">Pinwheel</option><option value="5">Kaleidoscope</option><option value="6">Moir&eacute; rings</option><option value="7">Plasma waves</option><option value="8">Zooming squares</option></select></label>
       <label class="row"><span>Speed</span><input type="range" data-k="speed" min="0" max="3" step="0.05" value="0.6"><output></output></label>
       <label class="row"><span>Arms</span><input type="range" data-k="arms" min="1" max="16" step="1" value="6"><output></output></label>
       <label class="row"><span>Tightness</span><input type="range" data-k="twist" min="0" max="30" step="0.5" value="8"><output></output></label>
@@ -205,19 +214,23 @@ I am relaxed</textarea></label>
       <label class="row"><span>Pulse</span><input type="range" data-k="pulse" min="0" max="1" step="0.05" value="0.3"><output></output></label>
       <label class="row"><span>Colors</span>
         <span class="pair"><input type="color" data-k="colorA" value="#8f6bff"><input type="color" data-k="colorB" value="#0d0820"></span></label>
+      <p class="hint">Arms = number of rays or segments. Tightness = how many rings or waves. These work for every pattern.</p>
       <label class="row check"><input type="checkbox" data-k="reverse"><span>Reverse direction</span></label>
       <label class="row check"><input type="checkbox" data-k="cut" checked><span>See-through dark bands (overlay only)</span></label>
     </div>
 
     <div class="grp" data-g="file" hidden>
       <div class="row">
-        <button type="button" data-k="fileBtn">Choose video&hellip;</button>
-        <span class="fname" data-k="fileName">No file chosen</span>
-        <input type="file" data-k="fileInput" accept="video/*,.mkv,.webm,.mp4,.mov" hidden>
+        <button type="button" data-k="fileBtn">Choose videos&hellip;</button>
+        <button type="button" data-k="dirBtn">Choose folder&hellip;</button>
+        <input type="file" data-k="fileInput" accept="video/*,.mkv,.webm,.mp4,.mov" multiple hidden>
+        <input type="file" data-k="dirInput" webkitdirectory hidden>
       </div>
+      <div class="row"><span class="fname" data-k="fileName">No file chosen</span></div>
+      <div class="btnrow" data-k="plRow" hidden><button type="button" data-k="plPrev">&#9198; Previous</button><button type="button" data-k="plNext">Next &#9197;</button><label class="check inl"><input type="checkbox" data-k="shuffle"><span>Shuffle</span></label><span class="time" data-k="plPos"></span></div>
       <div class="seek"><input type="range" data-k="fileSeek" min="0" max="1000" step="1" value="0"><span class="time" data-k="fileTime">0:00 / 0:00</span></div>
       <div class="btnrow"><button type="button" data-k="abA">Set A</button><button type="button" data-k="abB">Set B</button><button type="button" data-k="abClear">Clear A-B</button><span class="time" data-k="abLabel"></span></div>
-      <label class="row check"><input type="checkbox" data-k="loop" checked><span>Loop</span></label>
+      <label class="row check"><input type="checkbox" data-k="loop" checked><span>Loop (the video, or the whole list)</span></label>
       <label class="row"><span>Playback speed</span><input type="range" data-k="rate" min="0.25" max="2" step="0.05" value="1"><output></output></label>
       <label class="row"><span>Volume</span><input type="range" data-k="volume" min="0" max="1" step="0.05" value="0.8"><output></output></label>
       <label class="row"><span>Fit</span>
