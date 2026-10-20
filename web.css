@@ -21,3 +21,5 @@ input[type="range"] { min-height: 32px; }
 }
 [data-k="dirBtn"] { display: none; }
 [data-k="addDir"] { display: none; }
+/* PC-only options */
+label:has(#pAuto), label:has(#pSoft), label:has(#pSoft) + p.hint, label:has([data-k="cut"]) { display: none; }
