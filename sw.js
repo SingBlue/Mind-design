@@ -1,5 +1,5 @@
 // Offline cache. Online: always load the newest files. Offline: use the saved copy.
-const VERSION = 'spiral-stage-v9';
+const VERSION = 'spiral-stage-v11';
 const FILES = ['./', 'index.html', 'app.js', 'spiral.js', 'style.css', 'web.css', 'web.js', 'manifest.json', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {

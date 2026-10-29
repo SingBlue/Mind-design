@@ -175,3 +175,14 @@ input[type="number"] {
 .addrow { margin: 0 0 14px; }
 .addrow button { width: 100%; }
 label.check.inl { display: inline-flex; align-items: center; gap: 6px; }
+
+#mini { position: fixed; left: 10px; bottom: 10px; z-index: 110; display: flex; flex-direction: column; gap: 4px;
+  max-width: min(560px, calc(100vw - 20px)); padding: 6px 8px; border-radius: 10px; background: rgba(10, 8, 24, 0.82);
+  border: 1px solid var(--line); opacity: 0.55; font-size: 12px; }
+#mini:hover, #mini:focus-within { opacity: 1; }
+#mini[hidden] { display: none; }
+#mini .mrow { display: flex; align-items: center; gap: 4px; }
+#mini .mlab { width: 52px; color: var(--muted); flex: none; }
+#mini button { padding: 2px 7px; font-size: 13px; line-height: 1.3; min-width: 28px; }
+#mini input[type=range] { flex: 1; min-width: 60px; }
+#mini .mtime { width: 84px; text-align: right; color: var(--muted); flex: none; font-variant-numeric: tabular-nums; }

@@ -354,13 +354,52 @@
       const loop = this.v('forceLoop'), vol = this.v('webVolume');
       if (c.kind === 'video') {
         c.node.loop = loop; c.node.volume = vol;
-        if (state.paused) c.node.pause(); else if (c.node.paused && !c.node.ended) c.node.play().catch(() => {});
+        if (state.paused || c.userPaused) c.node.pause(); else if (c.node.paused && !c.node.ended) c.node.play().catch(() => {});
       } else if (c.kind === 'yt') {
         this.ytCmd('setVolume', [Math.round(vol * 100)]);
         this.ytCmd('setLoop', [!!loop]);
         if (state.paused) this.ytCmd('pauseVideo');
       }
     }
+
+    // ---- mini bar / hotkey helpers
+    mediaInfo() {
+      const c = this.cur;
+      if (!c) return null;
+      if (c.type === 'file') { const v = c.node; return { t: v.currentTime, d: v.duration, paused: v.paused, nav: this.list.length > 1 }; }
+      if (c.type === 'url') {
+        if (c.kind === 'video') return { t: c.node.currentTime, d: c.node.duration, paused: c.node.paused, nav: false };
+        if (c.kind === 'yt' && c.ready) return { t: c.yt.t, d: c.yt.d, paused: !!c.userPaused, nav: false };
+      }
+      return null;
+    }
+
+    skip(sec) {
+      const c = this.cur;
+      if (!c) return;
+      if (c.type === 'file') {
+        const v = c.node;
+        if (isFinite(v.duration)) v.currentTime = Math.min(Math.max(0, v.currentTime + sec), v.duration);
+      } else if (c.type === 'url') {
+        if (c.kind === 'video') c.node.currentTime = Math.max(0, c.node.currentTime + sec);
+        else if (c.kind === 'yt') { c.yt.t = Math.max(0, c.yt.t + sec); this.ytCmd('seekTo', [c.yt.t, true]); }
+      }
+    }
+
+    togglePlay() {
+      const c = this.cur;
+      if (!c) return;
+      if (c.type === 'file') {
+        if (c.node.paused) c.node.play().catch(() => {}); else c.node.pause();
+      } else if (c.type === 'url') {
+        if (c.kind === 'video') { if (c.node.paused) { c.userPaused = false; c.node.play().catch(() => {}); } else { c.userPaused = true; c.node.pause(); } }
+        else if (c.kind === 'yt') { c.userPaused = !c.userPaused; this.ytCmd(c.userPaused ? 'pauseVideo' : 'playVideo'); }
+      }
+    }
+
+    seekFraction(f) { this.seekTo(f); }
+
+    nav(dir) { if (this.list.length > 1 && this.cur && this.cur.type === 'file') { if (dir > 0) this.next(false); else this.prev(); } }
 
     // ---- seek bar and A-B loop
     tick() {
@@ -449,6 +488,7 @@
     setPaused(p) {
       const c = this.cur;
       if (!c) return;
+      if (!p) c.userPaused = false;
       if (c.type === 'spiral') { p ? c.r.stop() : c.r.start(); }
       else if (c.type === 'file') { p ? c.node.pause() : c.node.play().catch(() => {}); }
       else if (c.type === 'url') { if (c.kind === 'yt') this.ytCmd(p ? 'pauseVideo' : 'playVideo'); else this.pokeWeb(); }
@@ -1078,6 +1118,18 @@
       if (a != null && b != null && b > a && !au.paused && au.currentTime >= b) au.currentTime = a;
     }
 
+    mediaInfo() {
+      if (this.idx < 0 || !this.audio.src) return null;
+      return { t: this.audio.currentTime, d: this.audio.duration, paused: this.audio.paused, nav: this.items.length > 1 };
+    }
+    skip(sec) {
+      const a = this.audio;
+      if (isFinite(a.duration)) a.currentTime = Math.min(Math.max(0, a.currentTime + sec), a.duration);
+    }
+    togglePlay() { this.q('play').click(); }
+    nav(dir) { if (this.items.length > 1) this.playTrack(dir > 0 ? this.nextIndex(1) : this.idx - 1); }
+    seekFraction(f) { if (isFinite(this.audio.duration)) this.audio.currentTime = f * this.audio.duration; }
+
     setFade(f) { aFade = f; this.settings(); }
 
     setPaused(p, was) {
@@ -1619,6 +1671,7 @@
   function setPanel(show) {
     $('#app').classList.toggle('nopanel', !show);
     $('#reveal').hidden = show;
+    if (typeof miniRefresh === 'function') miniRefresh();
   }
 
   const panelShown = () => !$('#app').classList.contains('nopanel');
@@ -1643,7 +1696,7 @@
   let lastOver = null;
   document.addEventListener('mousemove', (e) => {
     if (!state.overlay || !api) return;
-    const over = !!e.target.closest('#panel, #reveal, #warning');
+    const over = !!e.target.closest('#panel, #reveal, #warning, #mini');
     if (over !== lastOver) { lastOver = over; api.setIgnore(!over); }
   });
 
@@ -1671,6 +1724,7 @@
 
   document.addEventListener('keydown', (e) => {
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
     const k = e.key.toLowerCase();
     if (k === ' ') { e.preventDefault(); setPaused(!state.paused); }
     else if (k === 'b') setBlackout(!state.blackout);
@@ -1707,8 +1761,107 @@
       else if (cmd === 'panel') setPanel(!panelShown());
       else if (cmd === 'blackout') setBlackout(!state.blackout);
       else if (cmd === 'pause') setPaused(!state.paused);
+      else if (/^[va](back|fwd|prev|next)$/.test(cmd)) mediaCmd(cmd);
     });
   }
+
+  // ---------------------------------------------------------------- Mini player bar and media hotkeys
+  const SKIP_SECONDS = 10;
+  const mini = $('#mini');
+  let miniSig = '', miniRows = [];
+  const uids = new WeakMap();
+  let uidN = 0;
+  const uidOf = (o) => { if (!uids.has(o)) uids.set(o, ++uidN); return uids.get(o); };
+
+  function miniEntries() {
+    const out = [];
+    layers.forEach((L, i) => { const m = L.mediaInfo(); if (m) out.push({ key: 'v' + uidOf(L), label: 'Video ' + (i + 1), obj: L, info: m }); });
+    audios.forEach((A, i) => { const m = A.mediaInfo(); if (m) out.push({ key: 'a' + uidOf(A), label: 'Audio ' + (i + 1), obj: A, info: m }); });
+    return out;
+  }
+
+  function miniBtn(text, title, fn) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = text; b.title = title;
+    b.addEventListener('click', fn);
+    return b;
+  }
+
+  function miniBuild(e) {
+    const o = e.obj;
+    const row = document.createElement('div');
+    row.className = 'mrow';
+    const lab = document.createElement('span'); lab.className = 'mlab'; lab.textContent = e.label;
+    row.appendChild(lab);
+    if (e.info.nav) row.appendChild(miniBtn('⏮', 'Previous', () => o.nav(-1)));
+    row.appendChild(miniBtn('⏪', 'Back ' + SKIP_SECONDS + ' seconds', () => o.skip(-SKIP_SECONDS)));
+    const play = miniBtn('⏯', 'Play or pause', () => o.togglePlay());
+    row.appendChild(play);
+    row.appendChild(miniBtn('⏩', 'Forward ' + SKIP_SECONDS + ' seconds', () => o.skip(SKIP_SECONDS)));
+    if (e.info.nav) row.appendChild(miniBtn('⏭', 'Next', () => o.nav(1)));
+    const seek = document.createElement('input');
+    seek.type = 'range'; seek.min = 0; seek.max = 1000; seek.step = 1; seek.value = 0;
+    const r = { row, play, seek, drag: false };
+    seek.addEventListener('pointerdown', () => { r.drag = true; });
+    seek.addEventListener('pointerup', () => { r.drag = false; });
+    seek.addEventListener('change', () => { r.drag = false; });
+    seek.addEventListener('input', () => o.seekFraction(parseFloat(seek.value) / 1000));
+    row.appendChild(seek);
+    const tm = document.createElement('span'); tm.className = 'mtime';
+    row.appendChild(tm);
+    r.time = tm;
+    mini.appendChild(row);
+    return r;
+  }
+
+  function miniRefresh() {
+    const ents = panelShown() ? [] : miniEntries();
+    mini.hidden = ents.length === 0;
+    if (!ents.length) { miniSig = ''; return; }
+    const sig = ents.map((e) => e.key + (e.info.nav ? 'n' : '')).join('|');
+    if (sig !== miniSig) {
+      miniSig = sig;
+      mini.innerHTML = '';
+      miniRows = ents.map(miniBuild);
+    }
+    ents.forEach((e, i) => {
+      const r = miniRows[i], m = e.info;
+      const ok = isFinite(m.d) && m.d > 0;
+      r.seek.disabled = !ok;
+      if (ok && !r.drag) r.seek.value = Math.round((m.t / m.d) * 1000);
+      r.time.textContent = ok ? `${fmtTime(m.t)} / ${fmtTime(m.d)}` : '';
+      r.play.textContent = m.paused ? '▶' : '⏸';
+    });
+  }
+  setInterval(miniRefresh, 400);
+
+  // v = videos, a = audio boxes. Works on every video layer / audio box that has something loaded.
+  function mediaCmd(cmd) {
+    const targets = cmd[0] === 'v' ? layers.filter((L) => L.mediaInfo()) : audios.filter((A) => A.mediaInfo());
+    const act = cmd.slice(1);
+    targets.forEach((t) => {
+      if (act === 'back') t.skip(-SKIP_SECONDS);
+      else if (act === 'fwd') t.skip(SKIP_SECONDS);
+      else if (act === 'next') t.nav(1);
+      else if (act === 'prev') t.nav(-1);
+    });
+    miniRefresh();
+  }
+
+  document.addEventListener('keydown', (e) => {
+    const t = e.target;
+    if (t && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName) && !(t.type === 'range' && false)) return;
+    if (t && t.isContentEditable) return;
+    const g = e.shiftKey ? 'a' : 'v';
+    if (e.ctrlKey && e.altKey) {
+      const m = { KeyJ: 'back', KeyL: 'fwd', KeyB: 'prev', KeyN: 'next' }[e.code];
+      if (m) { e.preventDefault(); mediaCmd(g + m); }
+      return;
+    }
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+    if (e.key === 'ArrowLeft') { e.preventDefault(); mediaCmd(g + 'back'); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); mediaCmd(g + 'fwd'); }
+  });
 
   // ---------------------------------------------------------------- Adding and removing layers
   function makeLayer() {
